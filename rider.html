@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>THC Delivery - Rider</title>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f5f5f2;color:#20231f;font:16px Arial,sans-serif}
+.wrap{max-width:760px;margin:auto;padding:28px 18px}header{margin-bottom:24px}h1{font-size:25px;margin:0 0 7px}h2{font-size:18px;margin:0 0 12px}.sub{color:#62685f;font-size:14px;line-height:1.5}
+.card{background:#fff;border:1px solid #e1e4dd;border-radius:14px;padding:20px;margin:14px 0;box-shadow:0 3px 12px #0000000a}
+input,button{font:inherit;padding:12px;border-radius:9px}input{width:100%;border:1px solid #bfc5bb;margin:7px 0}button{background:#253c28;color:#fff;border:0;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}
+.hidden{display:none!important}.note{padding:11px;background:#f3f5ee;border-radius:9px;margin-top:10px}.error{background:#fdeced;color:#8a2428}
+.customer-list{display:flex;flex-direction:column;gap:10px}.customer-card{border:1px solid #e1e4dd;border-radius:12px;padding:15px;background:#fafbf8}.customer-name{font-weight:700;font-size:17px}.customer-status{font-size:13px;color:#62685f;margin-top:5px}.pick-button{margin-top:12px;width:100%}
+.status{padding:12px;border-radius:9px;background:#f3f5ee;font-weight:700;margin-bottom:14px}.location-box{padding:13px;border-radius:9px;background:#f3f5ee;font-size:14px;margin-bottom:10px}.map-link{display:inline-block;margin-top:8px;color:#1769aa;font-weight:700;text-decoration:none}
+.action-row{display:flex;gap:8px;flex-wrap:wrap}.action-row button{flex:1;min-width:140px}.on-way{background:#245f9e}.delivered{background:#237a3b}.back{background:#62685f}
+.messages{height:280px;overflow:auto;border:1px solid #e1e4dd;border-radius:10px;padding:10px;background:#fafbf8}.msg{padding:9px 11px;margin:7px 0;border-radius:10px;background:#edf2e8;max-width:84%;word-wrap:break-word}.mine{margin-left:auto;background:#dcebd8}.meta{font-size:12px;color:#687066;margin-bottom:3px}
+.row{display:flex;gap:8px;margin-top:10px}.row input{margin:0;flex:1}.row button{white-space:nowrap}.empty{text-align:center;padding:20px;color:#62685f}.header-row{display:flex;justify-content:space-between;align-items:center;gap:10px}.logout{background:#62685f;padding:9px 12px;font-size:14px}
+</style>
+</head>
+<body>
+<main class="wrap">
+<header><div class="header-row"><div><h1>MAASIN'S OG BURGER PROJECT</h1><div class="sub">Rider Delivery Console</div></div><button id="logoutButton" class="logout hidden" onclick="logout()">Sign Out</button></div></header>
+
+<section id="loginCard" class="card">
+<h2>Rider Sign In</h2><p class="sub">Sign in to view active customers.</p>
+<input id="email" type="email" autocomplete="email" placeholder="Email">
+<input id="password" type="password" autocomplete="current-password" placeholder="Password">
+<button id="loginButton" onclick="login()">Sign In</button>
+<div id="loginNote" class="note hidden"></div>
+</section>
+
+<section id="dashboard" class="hidden">
+<div class="card"><h2>Active Customers</h2><p class="sub">Customers waiting for a rider will appear here.</p><div id="customerList" class="customer-list"><div class="empty">Waiting for customers...</div></div></div>
+
+<section id="activeDelivery" class="hidden">
+<div class="card">
+<h2 id="selectedCustomerName">Customer</h2>
+<div id="deliveryStatus" class="status">Rider accepted customer</div>
+<div id="customerLocation" class="location-box">Customer location has not been shared.</div>
+<div class="action-row">
+<button id="onWayButton" class="on-way" onclick="markOnTheWay()">On The Way</button>
+<button id="deliveredButton" class="delivered" onclick="markDelivered()">Delivered</button>
+<button class="back" onclick="backToCustomers()">Back to Customers</button>
+</div>
+<div id="actionNote" class="note hidden"></div>
+</div>
+
+<div class="card"><h2>Chat with Customer</h2><div id="messages" class="messages"></div>
+<div class="row"><input id="messageInput" maxlength="500" placeholder="Write a message..." onkeydown="handleMessageKey(event)"><button onclick="sendMessage()">Send</button></div></div>
+</section>
+</section>
+</main>
+
+<script>
+const firebaseConfig={
+apiKey:"AIzaSyC57agn1E9fiWBY1ZlsH4ggsKwKsQAwBoQ",
+authDomain:"thc-rider-tracker.firebaseapp.com",
+databaseURL:"https://thc-rider-tracker-default-rtdb.asia-southeast1.firebasedatabase.app",
+projectId:"thc-rider-tracker",
+storageBucket:"thc-rider-tracker.appspot.com",
+messagingSenderId:"1020694020459",
+appId:"1:1020694020459:web:3abf81418fec72af168c2e"
+};
+firebase.initializeApp(firebaseConfig);
+const auth=firebase.auth(),db=firebase.database();
+let riderUid=null,selectedRoomKey=null,customersListener=null,roomListener=null,messagesListener=null;
+
+function escapeHtml(v){return String(v||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;")}
+function showNote(msg,error=false){const e=document.getElementById("loginNote");e.textContent=msg;e.className="note "+(error?"error":"");e.classList.remove("hidden")}
+function showAction(msg,error=false){const e=document.getElementById("actionNote");e.textContent=msg;e.className="note "+(error?"error":"");e.classList.remove("hidden")}
+
+async function login(){
+const email=document.getElementById("email").value.trim(),password=document.getElementById("password").value;
+if(!email){showNote("Please enter your email.",true);return}
+if(!password){showNote("Please enter your password.",true);return}
+const b=document.getElementById("loginButton");b.disabled=true;
+try{const c=await auth.signInWithEmailAndPassword(email,password);riderUid=c.user.uid;enterDashboard()}
+catch(e){console.error(e);showNote(e.message,true);b.disabled=false}
+}
+
+function enterDashboard(){
+document.getElementById("loginCard").classList.add("hidden");
+document.getElementById("dashboard").classList.remove("hidden");
+document.getElementById("logoutButton").classList.remove("hidden");
+listenForCustomers();
+}
+
+async function logout(){
+removeListeners();await auth.signOut();riderUid=null;selectedRoomKey=null;
+document.getElementById("dashboard").classList.add("hidden");document.getElementById("logoutButton").classList.add("hidden");document.getElementById("loginCard").classList.remove("hidden");document.getElementById("loginButton").disabled=false;
+}
+
+function listenForCustomers(){
+const ref=db.ref("active_deliveries");
+if(customersListener)ref.off("value",customersListener);
+customersListener=ref.on("value",snap=>{
+const rooms=[];
+snap.forEach(child=>{
+const r=child.val();if(!r)return;
+if(r.status==="WAITING"||(r.riderId===riderUid&&(r.status==="ACCEPTED"||r.status==="ON_THE_WAY")))rooms.push({key:child.key,room:r});
+});
+rooms.sort((a,b)=>Number(a.room.createdAt||0)-Number(b.room.createdAt||0));
+renderCustomerList(rooms);
+});
+}
+
+function renderCustomerList(rooms){
+const c=document.getElementById("customerList");
+if(!rooms.length){c.innerHTML='<div class="empty">No active customers right now.</div>';return}
+c.innerHTML=rooms.map(x=>{
+const r=x.room,key=x.key;
+const mine=r.riderId===riderUid;
+let text="Waiting for rider";
+if(r.status==="ACCEPTED")text="Rider accepted";
+if(r.status==="ON_THE_WAY")text="Delivery is on the way";
+return `<div class="customer-card"><div class="customer-name">${escapeHtml(r.customerName)}</div><div class="customer-status">${text}</div>${
+r.status==="WAITING"?`<button class="pick-button" onclick="pickCustomer('${key}')">Pick Customer</button>`:
+mine?`<button class="pick-button" onclick="openSelectedCustomer('${key}')">Open Delivery</button>`:""
+}</div>`;
+}).join("");
+}
+
+async function pickCustomer(roomKey){
+if(!riderUid)return;
+if(selectedRoomKey){showAction("Finish or leave your current delivery first.",true);return}
+const activeRef=db.ref("active_deliveries/"+roomKey);
+try{
+const result=await activeRef.transaction(r=>{
+if(!r||r.status!=="WAITING"||r.riderId)return;
+r.status="ACCEPTED";r.riderId=riderUid;r.acceptedAt=firebase.database.ServerValue.TIMESTAMP;return r;
+});
+if(!result.committed){alert("This customer was already picked or is no longer available.");return}
+const active=result.snapshot.val();
+const roomData={
+customerUid:active.customerUid,
+customerName:active.customerName,
+customerNameNormalized:String(active.customerName||"").toLowerCase(),
+createdAt:active.createdAt,
+status:"ACCEPTED",
+riderId:riderUid,
+acceptedAt:firebase.database.ServerValue.TIMESTAMP,
+locationSharing:false
+};
+await db.ref("deliveries/"+roomKey).set(roomData);
+selectedRoomKey=roomKey;
+openSelectedCustomer(roomKey);
+}catch(e){console.error(e);showAction("Unable to pick customer: "+e.message,true)}
+}
+
+async function openSelectedCustomer(roomKey){
+selectedRoomKey=roomKey;
+try{
+const r=(await db.ref("deliveries/"+roomKey).once("value")).val();
+if(!r){showAction("Conversation room is not ready.",true);selectedRoomKey=null;return}
+if(r.riderId!==riderUid){showAction("This customer is assigned to another rider.",true);selectedRoomKey=null;return}
+document.getElementById("activeDelivery").classList.remove("hidden");
+document.getElementById("selectedCustomerName").textContent=r.customerName||"Customer";
+updateDeliveryStatus(r);updateCustomerLocation(r);listenToSelectedRoom();
+}catch(e){console.error(e);showAction("Unable to open delivery: "+e.message,true)}
+}
+
+function listenToSelectedRoom(){
+if(!selectedRoomKey)return;
+const ref=db.ref("deliveries/"+selectedRoomKey);
+if(roomListener)ref.off("value",roomListener);
+roomListener=ref.on("value",snap=>{
+const r=snap.val();if(!r)return;
+if(r.riderId!==riderUid)return;
+updateDeliveryStatus(r);updateCustomerLocation(r);
+});
+listenToMessages();
+}
+
+function updateDeliveryStatus(r){
+const e=document.getElementById("deliveryStatus"),on=document.getElementById("onWayButton"),done=document.getElementById("deliveredButton");
+if(r.status==="ACCEPTED"){e.textContent="Rider accepted customer";on.disabled=false;done.disabled=true}
+else if(r.status==="ON_THE_WAY"){e.textContent="Rider is on the way";on.disabled=true;done.disabled=false}
+else if(r.status==="DELIVERED"){e.textContent="Delivery complete";on.disabled=true;done.disabled=true}
+else{e.textContent="Waiting for a rider";on.disabled=true;done.disabled=true}
+}
+
+function updateCustomerLocation(r){
+const e=document.getElementById("customerLocation");
+if(!r.locationSharing||!r.customerLocation){e.textContent="Customer location has not been shared.";return}
+const lat=Number(r.customerLocation.lat),lng=Number(r.customerLocation.lng);
+if(!Number.isFinite(lat)||!Number.isFinite(lng)){e.textContent="Customer location is unavailable.";return}
+const url="https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(lat+","+lng);
+e.innerHTML="Customer is sharing their location.<br><a class='map-link' target='_blank' rel='noopener noreferrer' href='"+url+"'>Open Customer Location in Google Maps</a>";
+}
+
+async function markOnTheWay(){
+if(!selectedRoomKey)return;
+try{
+const updates={};
+updates["active_deliveries/"+selectedRoomKey+"/status"]="ON_THE_WAY";
+updates["active_deliveries/"+selectedRoomKey+"/onTheWayAt"]=firebase.database.ServerValue.TIMESTAMP;
+updates["deliveries/"+selectedRoomKey+"/status"]="ON_THE_WAY";
+updates["deliveries/"+selectedRoomKey+"/onTheWayAt"]=firebase.database.ServerValue.TIMESTAMP;
+await db.ref().update(updates);
+showAction("Customer has been notified that you are on the way.");
+}catch(e){console.error(e);showAction(e.message,true)}
+}
+
+async function markDelivered(){
+if(!selectedRoomKey)return;
+if(!confirm("Mark this customer as DELIVERED?"))return;
+try{
+const updates={};
+updates["deliveries/"+selectedRoomKey+"/status"]="DELIVERED";
+updates["deliveries/"+selectedRoomKey+"/deliveredAt"]=firebase.database.ServerValue.TIMESTAMP;
+updates["deliveries/"+selectedRoomKey+"/locationSharing"]=false;
+updates["deliveries/"+selectedRoomKey+"/customerLocation"]=null;
+updates["active_deliveries/"+selectedRoomKey]=null;
+await db.ref().update(updates);
+showAction("Delivery marked as delivered.");
+selectedRoomKey=null;document.getElementById("activeDelivery").classList.add("hidden");
+}catch(e){console.error(e);showAction(e.message,true)}
+}
+
+function backToCustomers(){
+
+if(roomListener&&selectedRoomKey)db.ref("deliveries/"+selectedRoomKey).off("value",roomListener);
+if(messagesListener&&selectedRoomKey)db.ref("deliveries/"+selectedRoomKey+"/messages").off("value",messagesListener);
+roomListener=messagesListener=null;selectedRoomKey=null;document.getElementById("activeDelivery").classList.add("hidden");
+}
+
+function listenToMessages(){
+if(!selectedRoomKey)return;
+const ref=db.ref("deliveries/"+selectedRoomKey+"/messages");
+if(messagesListener)ref.off("value",messagesListener);
+messagesListener=ref.on("value",snap=>renderMessages(snap.val()||{}));
+}
+
+function renderMessages(messages){
+const c=document.getElementById("messages");
+const list=Object.keys(messages).map(key=>({...messages[key],key})).sort((a,b)=>Number(a.at||0)-Number(b.at||0));
+c.innerHTML=list.map(m=>`<div class="msg ${m.from==="rider"?"mine":""}"><div class="meta">${m.from==="rider"?"You":"Customer"}</div>${escapeHtml(m.text)}</div>`).join("");
+c.scrollTop=c.scrollHeight;
+}
+
+function sendMessage(){
+if(!selectedRoomKey)return;
+const i=document.getElementById("messageInput"),text=i.value.trim();if(!text)return;
+db.ref("deliveries/"+selectedRoomKey+"/messages").push({from:"rider",text,at:firebase.database.ServerValue.TIMESTAMP}).then(()=>{i.value="";i.focus()}).catch(e=>showAction(e.message,true));
+}
+function handleMessageKey(e){if(e.key==="Enter"){e.preventDefault();sendMessage()}}
+
+function removeListeners(){
+if(customersListener){db.ref("active_deliveries").off("value",customersListener);customersListener=null}
+if(selectedRoomKey){
+if(roomListener)db.ref("deliveries/"+selectedRoomKey).off("value",roomListener);
+if(messagesListener)db.ref("deliveries/"+selectedRoomKey+"/messages").off("value",messagesListener);
+}
+roomListener=messagesListener=null;
+}
+
+auth.onAuthStateChanged(user=>{
+if(user&&!user.isAnonymous){riderUid=user.uid;enterDashboard()}
+else if(!user){document.getElementById("dashboard").classList.add("hidden");document.getElementById("loginCard").classList.remove("hidden");document.getElementById("logoutButton").classList.add("hidden")}
+});
+
+window.addEventListener("beforeunload",()=>{removeListeners()});
+</script>
+</body>
+</html>
