@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>THC Delivery</title>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f5f5f2;color:#20231f;font:16px Arial,sans-serif}
+.wrap{max-width:680px;margin:auto;padding:28px 18px}header{margin-bottom:24px}
+h1{font-size:25px;margin:0 0 6px}h2{font-size:19px;margin:0 0 12px}.sub{color:#62685f;font-size:14px;line-height:1.5}
+.card{background:#fff;border:1px solid #e1e4dd;border-radius:14px;padding:20px;margin:14px 0;box-shadow:0 3px 12px #0000000a}
+input,button{font:inherit;padding:12px;border-radius:9px}input{width:100%;border:1px solid #bfc5bb;margin:7px 0}
+button{border:0;background:#253c28;color:#fff;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}
+.full{width:100%;margin-top:8px}.hidden{display:none!important}.note{margin-top:10px;padding:11px;border-radius:9px;background:#f3f5ee;line-height:1.45}
+.error{background:#fdeced;color:#8a2428}.status{padding:13px;border-radius:9px;background:#f3f5ee;font-weight:700;margin-bottom:14px}
+.accepted{background:#e5f0e4}.on-way{background:#e5edf7}.delivered{background:#e5f2e8}
+.location-box{padding:13px;border-radius:9px;background:#f3f5ee;margin-top:10px;font-size:14px;line-height:1.5}
+.location-on{background:#237a3b}.map-link{display:inline-block;margin-top:8px;color:#1769aa;font-weight:700;text-decoration:none}
+.messages{height:280px;overflow:auto;border:1px solid #e1e4dd;border-radius:10px;padding:10px;background:#fafbf8}
+.msg{max-width:84%;padding:9px 11px;margin:7px 0;border-radius:10px;background:#edf2e8;word-wrap:break-word}.mine{margin-left:auto;background:#dcebd8}
+.meta{font-size:12px;color:#687066;margin-bottom:3px}.row{display:flex;gap:8px;margin-top:10px}.row input{margin:0;flex:1}.row button{white-space:nowrap}
+.complete{text-align:center;padding:15px 5px}.new-button{width:100%;margin-top:12px;background:#62685f}
+</style>
+</head>
+<body>
+<main class="wrap">
+<header><h1>MAASIN'S OG BURGER PROJECT</h1><div class="sub">THC Delivery</div></header>
+
+<section id="loadingCard" class="card"><h2>Loading...</h2><p class="sub">Checking your delivery request.</p></section>
+
+<section id="joinCard" class="card hidden">
+<h2>Start Delivery</h2><p class="sub">Enter your first name and surname so the rider can identify you.</p>
+<input id="firstName" type="text" maxlength="40" autocomplete="given-name" placeholder="First name">
+<input id="surname" type="text" maxlength="60" autocomplete="family-name" placeholder="Surname">
+<button id="joinButton" class="full" onclick="submitDeliveryRequest()" disabled>Continue</button>
+<div id="joinNote" class="note hidden"></div>
+</section>
+
+<section id="waitingSection" class="hidden">
+<div class="card"><h2 id="waitingCustomerName">Customer</h2>
+<div id="waitingStatus" class="status">Waiting for a rider</div>
+<p class="sub">Your request has been sent to the riders. Please wait for a rider to accept your delivery.</p>
+</div>
+</section>
+
+<section id="roomSection" class="hidden">
+<div class="card"><div class="sub">Customer</div><h2 id="customerNameDisplay">Customer</h2>
+<div id="statusText" class="status accepted">Rider accepted you</div></div>
+
+<div class="card"><h2>Your Location</h2>
+<p class="sub">Share your current location with the rider when requested.</p>
+<button id="locationButton" class="full" onclick="toggleLocation()">Share My Location</button>
+<div id="locationStatus" class="note">Location sharing is OFF.</div>
+<div id="customerMapBox" class="location-box hidden"></div>
+</div>
+
+<div class="card"><h2>Chat with Rider</h2>
+<div id="messages" class="messages"></div>
+<div class="row"><input id="messageInput" maxlength="500" placeholder="Write a message..." onkeydown="handleMessageKey(event)"><button onclick="sendMessage()">Send</button></div>
+</div>
+</section>
+
+<section id="completeSection" class="card hidden">
+<div class="complete"><h2>Delivery Complete</h2><p id="completeName" class="sub"></p>
+<p class="sub">Your rider has marked this delivery as delivered.</p>
+<button class="new-button" onclick="startNewDelivery()">Start New Delivery</button></div>
+</section>
+</main>
+
+<script>
+const firebaseConfig={
+apiKey:"AIzaSyC57agn1E9fiWBY1ZlsH4ggsKwKsQAwBoQ",
+authDomain:"thc-rider-tracker.firebaseapp.com",
+databaseURL:"https://thc-rider-tracker-default-rtdb.asia-southeast1.firebasedatabase.app",
+projectId:"thc-rider-tracker",
+storageBucket:"thc-rider-tracker.appspot.com",
+messagingSenderId:"1020694020459",
+appId:"1:1020694020459:web:3abf81418fec72af168c2e"
+};
+firebase.initializeApp(firebaseConfig);
+const auth=firebase.auth(),db=firebase.database();
+const REQUEST_KEY="thc_customer_request";
+let customerUid=null,requestKey=null,customerName=null;
+let activeListener=null,roomListener=null,messagesListener=null,locationWatchId=null;
+let authReady=false,authStarting=false,roomRetryTimer=null;
+
+function show(id){document.getElementById(id).classList.remove("hidden")}
+function hide(id){document.getElementById(id).classList.add("hidden")}
+function note(message,error=false){const e=document.getElementById("joinNote");e.textContent=message;e.className="note "+(error?"error":"");e.classList.remove("hidden")}
+function escapeHtml(v){return String(v||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;")}
+
+auth.onAuthStateChanged(async user=>{
+if(user){
+if(!user.isAnonymous){try{await auth.signOut()}catch(e){console.error(e)}return}
+customerUid=user.uid;authReady=true;await restoreRequest();return}
+if(authStarting)return;authStarting=true;
+try{await auth.signInAnonymously()}catch(e){console.error(e);hide("loadingCard");show("joinCard");note("Unable to connect to Firebase: "+e.message,true)}
+finally{authStarting=false}
+});
+
+async function restoreRequest(){
+const saved=localStorage.getItem(REQUEST_KEY);
+if(!saved){requestKey=null;customerName=null;hide("loadingCard");show("joinCard");document.getElementById("joinButton").disabled=false;return}
+requestKey=saved;
+try{
+const a=(await db.ref("active_deliveries/"+requestKey).once("value")).val();
+if(a){
+if(a.customerUid!==customerUid){clearRequest();showNewForm();return}
+customerName=a.customerName||"Customer";
+if(a.status==="WAITING"){showWaiting();listenForAcceptance();return}
+if(a.status==="ACCEPTED"||a.status==="ON_THE_WAY"){listenForAcceptance();await waitForRoom();return}
+}
+const r=(await db.ref("deliveries/"+requestKey).once("value")).val();
+if(r&&r.customerUid===customerUid){customerName=r.customerName||customerName||"Customer";if(r.status==="DELIVERED")showComplete();else openRoom();return}
+clearRequest();showNewForm();
+}catch(e){console.error(e);hide("loadingCard");show("joinCard");document.getElementById("joinButton").disabled=false;note("Unable to restore your delivery request: "+e.message,true)}
+}
+
+function showNewForm(){hide("loadingCard");hide("waitingSection");hide("roomSection");hide("completeSection");show("joinCard");document.getElementById("joinButton").disabled=!authReady}
+async function submitDeliveryRequest(){
+if(!authReady||!customerUid){note("Please wait for the delivery system to connect.",true);return}
+const existing=localStorage.getItem(REQUEST_KEY);
+if(existing){requestKey=existing;await restoreRequest();return}
+const first=document.getElementById("firstName").value.trim(),surname=document.getElementById("surname").value.trim();
+if(!first){note("Please enter your first name.",true);return}
+if(!surname){note("Please enter your surname.",true);return}
+customerName=(first+" "+surname).replace(/\s+/g," ").trim();
+const b=document.getElementById("joinButton");b.disabled=true;
+try{
+const ref=db.ref("active_deliveries").push();requestKey=ref.key;
+await ref.set({customerUid,customerName,status:"WAITING",createdAt:firebase.database.ServerValue.TIMESTAMP});
+localStorage.setItem(REQUEST_KEY,requestKey);showWaiting();listenForAcceptance();
+}catch(e){console.error(e);requestKey=null;b.disabled=false;note("Unable to send delivery request: "+e.message,true)}
+}
+
+function showWaiting(){
+hide("loadingCard");hide("joinCard");hide("roomSection");hide("completeSection");show("waitingSection");
+document.getElementById("waitingCustomerName").textContent=customerName||"Customer";
+document.getElementById("waitingStatus").textContent="Waiting for a rider";
+document.getElementById("waitingStatus").className="status";
+}
+
+function listenForAcceptance(){
+if(!requestKey)return;
+const ref=db.ref("active_deliveries/"+requestKey);
+if(activeListener)ref.off("value",activeListener);
+activeListener=ref.on("value",async snap=>{
+const a=snap.val();
+if(!a||a.customerUid!==customerUid)return;
+customerName=a.customerName||customerName||"Customer";
+if(a.status==="WAITING"){showWaiting();return}
+if(a.status==="ACCEPTED"||a.status==="ON_THE_WAY")await waitForRoom();
+});
+}
+
+async function waitForRoom(){
+if(!requestKey)return;
+if(roomRetryTimer)clearTimeout(roomRetryTimer);
+try{
+const r=(await db.ref("deliveries/"+requestKey).once("value")).val();
+if(r&&r.customerUid===customerUid){customerName=r.customerName||customerName||"Customer";openRoom();return}
+showWaiting();
+roomRetryTimer=setTimeout(waitForRoom,1000);
+}catch(e){console.error("Room wait:",e);roomRetryTimer=setTimeout(waitForRoom,1500)}
+}
+
+function openRoom(){
+if(roomRetryTimer){clearTimeout(roomRetryTimer);roomRetryTimer=null}
+hide("loadingCard");hide("joinCard");hide("waitingSection");hide("completeSection");show("roomSection");
+document.getElementById("customerNameDisplay").textContent=customerName||"Customer";
+listenToRoom();
+}
+
+function listenToRoom(){
+if(!requestKey)return;
+const ref=db.ref("deliveries/"+requestKey);
+if(roomListener)ref.off("value",roomListener);
+roomListener=ref.on("value",snap=>{
+const r=snap.val();if(!r||r.customerUid!==customerUid)return;
+customerName=r.customerName||customerName||"Customer";
+document.getElementById("customerNameDisplay").textContent=customerName;
+updateStatus(r);updateLocationUI(r);
+if(r.status==="DELIVERED")showComplete();else{show("roomSection");hide("completeSection")}
+});
+listenToMessages();
+}
+
+function updateStatus(r){
+const e=document.getElementById("statusText");e.className="status";
+if(r.status==="ACCEPTED"){e.textContent="Rider accepted you";e.classList.add("accepted")}
+else if(r.status==="ON_THE_WAY"){e.textContent="Rider is on the way";e.classList.add("on-way")}
+else if(r.status==="DELIVERED"){e.textContent="Delivery complete";e.classList.add("delivered")}
+else e.textContent="Waiting for a rider";
+}
+
+function toggleLocation(){if(locationWatchId!==null)stopLocation();else startLocation()}
+
+function startLocation(){
+if(!navigator.geolocation){setLocationStatus("Your browser does not support location.",true);return}
+if(!requestKey){return}
+const b=document.getElementById("locationButton");b.disabled=true;
+navigator.geolocation.getCurrentPosition(pos=>{
+saveCustomerLocation(pos);
+locationWatchId=navigator.geolocation.watchPosition(saveCustomerLocation,e=>console.error("Location:",e),{enableHighAccuracy:true,maximumAge:5000,timeout:15000});
+b.disabled=false;b.textContent="Stop Sharing My Location";b.classList.add("location-on");
+setLocationStatus("Location sharing is ON. The rider can open your Google Maps location.");
+},e=>{console.error(e);b.disabled=false;setLocationStatus("Location permission was not granted.",true)},{enableHighAccuracy:true,maximumAge:0,timeout:15000});
+}
+
+function saveCustomerLocation(pos){
+if(!requestKey)return;
+const lat=pos.coords.latitude,lng=pos.coords.longitude;
+db.ref("deliveries/"+requestKey).update({locationSharing:true,customerLocation:{lat,lng,accuracy:pos.coords.accuracy,at:firebase.database.ServerValue.TIMESTAMP}})
+.then(()=>showCustomerMapLink(lat,lng)).catch(e=>setLocationStatus("Unable to share your location: "+e.message,true));
+}
+
+function stopLocation(){
+if(locationWatchId!==null){navigator.geolocation.clearWatch(locationWatchId);locationWatchId=null}
+if(requestKey)db.ref("deliveries/"+requestKey).update({locationSharing:false,customerLocation:null}).catch(e=>console.error(e));
+const b=document.getElementById("locationButton");b.textContent="Share My Location";b.classList.remove("location-on");
+setLocationStatus("Location sharing is OFF.");document.getElementById("customerMapBox").classList.add("hidden");
+}
+
+function updateLocationUI(r){
+const b=document.getElementById("locationButton"),box=document.getElementById("customerMapBox");
+if(r.locationSharing&&r.customerLocation){
+b.textContent="Stop Sharing My Location";b.classList.add("location-on");
+setLocationStatus("Location sharing is ON. The rider can open your Google Maps location.");
+const lat=Number(r.customerLocation.lat),lng=Number(r.customerLocation.lng);
+if(Number.isFinite(lat)&&Number.isFinite(lng))showCustomerMapLink(lat,lng);
+}else{
+b.textContent="Share My Location";b.classList.remove("location-on");setLocationStatus("Location sharing is OFF.");box.classList.add("hidden");
+}
+}
+
+function setLocationStatus(message,error=false){const e=document.getElementById("locationStatus");e.textContent=message;e.className="note "+(error?"error":"")}
+
+function showCustomerMapLink(lat,lng){
+const url="https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(lat+","+lng);
+const box=document.getElementById("customerMapBox");
+box.innerHTML="Your current location has been shared.<br><a class='map-link' target='_blank' rel='noopener noreferrer' href='"+url+"'>Open My Location in Google Maps</a>";
+box.classList.remove("hidden");
+}
+
+function listenToMessages(){
+if(!requestKey)return;
+const ref=db.ref("deliveries/"+requestKey+"/messages");
+if(messagesListener)ref.off("value",messagesListener);
+messagesListener=ref.on("value",snap=>renderMessages(snap.val()||{}));
+}
+
+function renderMessages(messages){
+const c=document.getElementById("messages");
+const list=Object.keys(messages).map(key=>({...messages[key],key})).sort((a,b)=>Number(a.at||0)-Number(b.at||0));
+c.innerHTML=list.map(m=>`<div class="msg ${m.from==="customer"?"mine":""}"><div class="meta">${m.from==="customer"?"You":"Rider"}</div>${escapeHtml(m.text)}</div>`).join("");
+c.scrollTop=c.scrollHeight;
+}
+
+function sendMessage(){
+if(!requestKey)return;
+const input=document.getElementById("messageInput"),text=input.value.trim();if(!text)return;
+db.ref("deliveries/"+requestKey+"/messages").push({from:"customer",text,at:firebase.database.ServerValue.TIMESTAMP})
+.then(()=>{input.value="";input.focus()}).catch(e=>console.error("Message:",e));
+}
+
+function handleMessageKey(e){if(e.key==="Enter"){e.preventDefault();sendMessage()}}
+
+function showComplete(){
+if(locationWatchId!==null){navigator.geolocation.clearWatch(locationWatchId);locationWatchId=null}
+hide("loadingCard");hide("joinCard");hide("waitingSection");hide("roomSection");show("completeSection");
+document.getElementById("completeName").textContent=customerName||"";
+}
+
+function startNewDelivery(){
+if(roomListener&&requestKey)db.ref("deliveries/"+requestKey).off("value",roomListener);
+if(messagesListener&&requestKey)db.ref("deliveries/"+requestKey+"/messages").off("value",messagesListener);
+if(activeListener&&requestKey)db.ref("active_deliveries/"+requestKey).off("value",activeListener);
+roomListener=messagesListener=activeListener=null;
+if(roomRetryTimer){clearTimeout(roomRetryTimer);roomRetryTimer=null}
+if(locationWatchId!==null){navigator.geolocation.clearWatch(locationWatchId);locationWatchId=null}
+clearRequest();requestKey=null;customerName=null;
+document.getElementById("firstName").value="";document.getElementById("surname").value="";document.getElementById("messages").innerHTML="";
+showNewForm();
+}
+
+function clearRequest(){localStorage.removeItem(REQUEST_KEY)}
+
+window.addEventListener("beforeunload",()=>{if(locationWatchId!==null){navigator.geolocation.clearWatch(locationWatchId);locationWatchId=null}});
+</script>
+</body>
+</html>
